@@ -1,0 +1,15 @@
+# Database Configuration
+neo4j:
+  uri: ${NEO4J_URI}
+  user: ${NEO4J_USER}
+  password: ${NEO4J_PASSWORD}
+
+# OpenAI Configuration
+openai:
+  api_key: ${OPENAI_API_KEY}
+
+# Data Directories
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  indexed_dir: "data/processed/indexed" 

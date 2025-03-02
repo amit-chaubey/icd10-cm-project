@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+*.so
+.Python
+build/
+*.egg-info/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Logs
+*.log
+
+# Neo4j
+data/
+
+# macOS
+.DS_Store
+
+# Streamlit
+.streamlit/

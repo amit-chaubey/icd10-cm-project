@@ -1,0 +1,9 @@
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Acknowledgments
+
+- ICD-10-CM codes provided by the Centers for Medicare & Medicaid Services (CMS)
+- Built with Neo4j, Streamlit, and Hugging Face Transformers
