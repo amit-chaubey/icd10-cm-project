@@ -11,6 +11,9 @@ from io import StringIO
 import json
 from typing import Dict, List, Any
 import openai
+from contextlib import contextmanager
+from datetime import datetime
+import time
 
 # Configure page first, before any other st commands
 st.set_page_config(
@@ -538,137 +541,171 @@ def perform_search(neo4j_client, search_query):
         logger.error(f"Search error: {str(e)}", exc_info=True)
         st.error(f"An error occurred during search: {str(e)}")
 
+@contextmanager
+def managed_neo4j_connection():
+    """Manage Neo4j connection with auto-reconnect"""
+    try:
+        client = Neo4jClient()
+        if not client.verify_connection():
+            client = Neo4jClient()  # Retry once
+        yield client
+    finally:
+        if client:
+            client.close()
+
+@st.cache_data(ttl=300)  # Cache for 5 minutes
+def check_database_health():
+    """Check database connection health"""
+    try:
+        with managed_neo4j_connection() as client:
+            return client.verify_connection()
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return False
+
 def main():
     # Main header
     st.title("🏥 ICD-10-CM Coding Assistant")
     st.markdown("---")
     
-    # Initialize Neo4j client
-    neo4j_client = init_neo4j()
-    if not neo4j_client:
-        st.error("❌ Failed to connect to database. Please check your connection.")
-        return
-
-    # Create tabs for different sections
-    tab1, tab2, tab3 = st.tabs(["🔍 Quick Code Lookup", "📚 Browse by Letter", "📝 Clinical Analysis"])
+    # Add session state for connection management
+    if 'last_health_check' not in st.session_state:
+        st.session_state.last_health_check = datetime.now()
     
-    # Tab 1: Quick Code Lookup
-    with tab1:
-        st.markdown("### Search for ICD-10 Codes")
+    # Perform health check every 5 minutes
+    if (datetime.now() - st.session_state.last_health_check).seconds > 300:
+        if not check_database_health():
+            st.error("Lost connection to database. Attempting to reconnect...")
+            time.sleep(2)  # Wait before retry
+            st.experimental_rerun()
+        st.session_state.last_health_check = datetime.now()
+
+    # Use managed connection in tabs
+    with managed_neo4j_connection() as neo4j_client:
+        if not neo4j_client:
+            show_connection_error()
+            return
+
+        # Create tabs for different sections
+        tab1, tab2, tab3 = st.tabs(["🔍 Quick Code Lookup", "📚 Browse by Letter", "📝 Clinical Analysis"])
         
-        # Create a form to capture Enter key
-        with st.form(key='search_form'):
-            search_query = st.text_input(
-                "Enter medical condition or term:",
-                placeholder="e.g., Type 2 diabetes, Hypertension, Asthma...",
-                key="search_input"
-            )
+        # Tab 1: Quick Code Lookup
+        with tab1:
+            st.markdown("### Search for ICD-10 Codes")
             
-            # Add search button
-            submitted = st.form_submit_button("Search", type="primary")
-            
-            # Debug information
-            if submitted:
-                logger.info(f"Form submitted with query: {search_query}")
+            # Create a form to capture Enter key
+            with st.form(key='search_form'):
+                search_query = st.text_input(
+                    "Enter medical condition or term:",
+                    placeholder="e.g., Type 2 diabetes, Hypertension, Asthma...",
+                    key="search_input"
+                )
                 
-            # Show processing status
-            if submitted and search_query:
-                st.info("Processing your search...")
-                perform_search(neo4j_client, search_query)
-            elif submitted and not search_query:
-                st.warning("Please enter a search term")
+                # Add search button
+                submitted = st.form_submit_button("Search", type="primary")
+                
+                # Debug information
+                if submitted:
+                    logger.info(f"Form submitted with query: {search_query}")
+                    
+                # Show processing status
+                if submitted and search_query:
+                    st.info("Processing your search...")
+                    perform_search(neo4j_client, search_query)
+                elif submitted and not search_query:
+                    st.warning("Please enter a search term")
 
-    # Tab 2: Browse by Letter
-    with tab2:
-        st.markdown("### Browse by Letter")
-        letters = ["Select a letter..."] + (neo4j_client.get_all_letters() or [])
-        selected_letter = st.selectbox(
-            "Select a letter to browse terms:",
-            letters,
-            index=0
-        )
-        
-        if selected_letter and selected_letter != "Select a letter...":
-            with st.spinner(f"Loading terms for '{selected_letter}'..."):
-                results = neo4j_client.query_by_letter(selected_letter)
-                if results:
-                    st.success(f"Found {len(results)} terms")
-                    for result in results:
-                        with st.expander(f"🔍 {result['term']}", expanded=False):
-                            if result.get('codes'):
-                                st.markdown("**ICD-10 Codes:**")
-                                for code in result['codes']:
-                                    st.code(code)
-                            if result.get('modifiers'):
-                                st.markdown("**Modifiers:**")
-                                for mod in result['modifiers']:
-                                    st.markdown(f"- {mod}")
-
-    # Tab 3: Clinical Analysis
-    with tab3:
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            st.markdown("### Clinical Note Analysis")
-            clinical_note = st.text_area(
-                "Enter clinical note:",
-                height=200,
-                placeholder="Enter the patient's clinical note here..."
+        # Tab 2: Browse by Letter
+        with tab2:
+            st.markdown("### Browse by Letter")
+            letters = ["Select a letter..."] + (neo4j_client.get_all_letters() or [])
+            selected_letter = st.selectbox(
+                "Select a letter to browse terms:",
+                letters,
+                index=0
             )
             
-            col1, col2 = st.columns(2)
+            if selected_letter and selected_letter != "Select a letter...":
+                with st.spinner(f"Loading terms for '{selected_letter}'..."):
+                    results = neo4j_client.query_by_letter(selected_letter)
+                    if results:
+                        st.success(f"Found {len(results)} terms")
+                        for result in results:
+                            with st.expander(f"🔍 {result['term']}", expanded=False):
+                                if result.get('codes'):
+                                    st.markdown("**ICD-10 Codes:**")
+                                    for code in result['codes']:
+                                        st.code(code)
+                                if result.get('modifiers'):
+                                    st.markdown("**Modifiers:**")
+                                    for mod in result['modifiers']:
+                                        st.markdown(f"- {mod}")
+
+        # Tab 3: Clinical Analysis
+        with tab3:
+            col1, col2 = st.columns([2, 1])
+            
             with col1:
-                analyze = st.button("Analyze Note", type="primary")
-            with col2:
-                clear = st.button("Clear", type="secondary")
+                st.markdown("### Clinical Note Analysis")
+                clinical_note = st.text_area(
+                    "Enter clinical note:",
+                    height=200,
+                    placeholder="Enter the patient's clinical note here..."
+                )
                 
-            if analyze and clinical_note:
-                with st.spinner("Analyzing clinical note..."):
-                    # Extract meaningful terms
-                    terms = process_clinical_terms(clinical_note)
+                col1, col2 = st.columns(2)
+                with col1:
+                    analyze = st.button("Analyze Note", type="primary")
+                with col2:
+                    clear = st.button("Clear", type="secondary")
                     
-                    # Group results by category
-                    findings = {
-                        'Diagnoses': [],
-                        'Symptoms': [],
-                        'Procedures': []
-                    }
-                    
-                    # Track processed terms to avoid duplicates
-                    processed_terms = set()
-                    
-                    for term in terms:
-                        if term not in processed_terms:
-                            results = neo4j_client.query_diagnosis(term)
+                if analyze and clinical_note:
+                    with st.spinner("Analyzing clinical note..."):
+                        # Extract meaningful terms
+                        terms = process_clinical_terms(clinical_note)
+                        
+                        # Group results by category
+                        findings = {
+                            'Diagnoses': [],
+                            'Symptoms': [],
+                            'Procedures': []
+                        }
+                        
+                        # Track processed terms to avoid duplicates
+                        processed_terms = set()
+                        
+                        for term in terms:
+                            if term not in processed_terms:
+                                results = neo4j_client.query_diagnosis(term)
+                                if results:
+                                    for result in results:
+                                        # Check code prefixes for categorization
+                                        codes = result.get('codes', [])
+                                        if codes:
+                                            if any(code.startswith(('R', 'S', 'T')) for code in codes):
+                                                findings['Symptoms'].append(result)
+                                            elif any(code.startswith(('0', '1', '2', '3', '4')) for code in codes):
+                                                findings['Procedures'].append(result)
+                                            else:
+                                                findings['Diagnoses'].append(result)
+                                            processed_terms.add(term)
+                        
+                        # Display organized results
+                        for category, results in findings.items():
                             if results:
-                                for result in results:
-                                    # Check code prefixes for categorization
-                                    codes = result.get('codes', [])
-                                    if codes:
-                                        if any(code.startswith(('R', 'S', 'T')) for code in codes):
-                                            findings['Symptoms'].append(result)
-                                        elif any(code.startswith(('0', '1', '2', '3', '4')) for code in codes):
-                                            findings['Procedures'].append(result)
-                                        else:
-                                            findings['Diagnoses'].append(result)
-                                        processed_terms.add(term)
-                    
-                    # Display organized results
-                    for category, results in findings.items():
-                        if results:
-                            st.markdown(f"### {category}")
-                            # Remove duplicates based on term names
-                            unique_results = {r['term']: r for r in results}.values()
-                            for result in unique_results:
-                                with st.expander(f"🔍 {result['term']}", expanded=False):
-                                    if result.get('codes'):
-                                        st.markdown("**ICD-10 Codes:**")
-                                        for code in result['codes']:
-                                            st.code(code)
-                                    if result.get('modifiers'):
-                                        st.markdown("**Modifiers:**")
-                                        for mod in result['modifiers']:
-                                            st.markdown(f"- {mod}")
+                                st.markdown(f"### {category}")
+                                # Remove duplicates based on term names
+                                unique_results = {r['term']: r for r in results}.values()
+                                for result in unique_results:
+                                    with st.expander(f"🔍 {result['term']}", expanded=False):
+                                        if result.get('codes'):
+                                            st.markdown("**ICD-10 Codes:**")
+                                            for code in result['codes']:
+                                                st.code(code)
+                                        if result.get('modifiers'):
+                                            st.markdown("**Modifiers:**")
+                                            for mod in result['modifiers']:
+                                                st.markdown(f"- {mod}")
 
     # Footer
     st.markdown("---")

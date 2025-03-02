@@ -14,32 +14,40 @@ logger = logging.getLogger(__name__)
 
 class Neo4jClient:
     def __init__(self):
-        """Initialize Neo4j client"""
-        self.uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
-        self.user = os.getenv("NEO4J_USER", "neo4j")
-        self.password = os.getenv("NEO4J_PASSWORD")
-        
-        if not self.password:
-            raise ValueError("NEO4J_PASSWORD not set")
-            
-        self.driver = GraphDatabase.driver(
-            self.uri, 
-            auth=(self.user, self.password)
-        )
-        
+        """Initialize with cloud database support"""
+        self.uri = st.secrets.get("NEO4J_URI", os.getenv("NEO4J_URI"))
+        self.user = st.secrets.get("NEO4J_USER", os.getenv("NEO4J_USER"))
+        self.password = st.secrets.get("NEO4J_PASSWORD", os.getenv("NEO4J_PASSWORD"))
+        self._driver = None
+        self.connect()
+    
+    def connect(self):
+        """Establish connection to Neo4j"""
+        try:
+            if not self._driver:
+                self._driver = GraphDatabase.driver(
+                    self.uri, 
+                    auth=(self.user, self.password),
+                    max_connection_lifetime=300  # 5 minutes
+                )
+        except Exception as e:
+            logger.error(f"Failed to connect to Neo4j: {e}")
+            self._driver = None
+
     def close(self):
-        """Close the Neo4j connection"""
-        if hasattr(self, 'driver'):
-            self.driver.close()
+        """Close Neo4j connection"""
+        if self._driver:
+            self._driver.close()
+            self._driver = None
 
     def verify_connection(self) -> bool:
-        """Verify that the connection to Neo4j is working"""
+        """Verify database connection is alive"""
         try:
-            with self.driver.session() as session:
-                result = session.run("RETURN 1 as test")
-                return result.single()["test"] == 1
+            with self._driver.session() as session:
+                result = session.run("RETURN 1")
+                return result.single()[0] == 1
         except Exception as e:
-            logger.error(f"Connection verification failed: {str(e)}")
+            logger.error(f"Connection verification failed: {e}")
             return False
 
     def preprocess_query(self, query: str) -> List[str]:
@@ -71,7 +79,7 @@ class Neo4jClient:
 
     def query_diagnosis(self, term: str) -> List[Dict]:
         """Query diagnosis terms and codes"""
-        with self.driver.session() as session:
+        with self._driver.session() as session:
             result = session.run("""
                 MATCH (t:Term)
                 WHERE toLower(t.name) CONTAINS toLower($term)
@@ -101,7 +109,7 @@ class Neo4jClient:
             offset: Number of results to skip
         """
         try:
-            with self.driver.session() as session:
+            with self._driver.session() as session:
                 query = """
                 MATCH (t:Term)
                 WHERE (
@@ -138,7 +146,7 @@ class Neo4jClient:
     def get_all_letters(self):
         """Get all available letter categories"""
         try:
-            with self.driver.session() as session:
+            with self._driver.session() as session:
                 result = session.run(
                     """
                     MATCH (l:Letter)
@@ -153,7 +161,7 @@ class Neo4jClient:
 
     def create_constraints(self):
         """Create enhanced database constraints and indices"""
-        with self.driver.session() as session:
+        with self._driver.session() as session:
             constraints = [
                 "CREATE CONSTRAINT IF NOT EXISTS FOR (l:Letter) REQUIRE l.name IS UNIQUE",
                 "CREATE CONSTRAINT IF NOT EXISTS FOR (c:Code) REQUIRE c.value IS UNIQUE",
@@ -174,7 +182,7 @@ class Neo4jClient:
     def load_icd_data(self, data: Dict[str, Any]):
         """Load ICD data with hierarchical structure into Neo4j"""
         try:
-            with self.driver.session() as session:
+            with self._driver.session() as session:
                 # First clear existing data
                 session.run("MATCH (n) DETACH DELETE n")
                 logger.info("Cleared existing database")
@@ -371,7 +379,7 @@ class Neo4jClient:
 
     def add_medical_data(self, diagnosis: str, code: str):
         """Add medical diagnosis and code to the database"""
-        with self.driver.session() as session:
+        with self._driver.session() as session:
             session.run(
                 """
                 MERGE (d:Diagnosis {name: $diagnosis}) 
@@ -385,7 +393,7 @@ class Neo4jClient:
     def clear_database(self) -> bool:
         """Clear all data from the database"""
         try:
-            with self.driver.session() as session:
+            with self._driver.session() as session:
                 # Drop existing constraints
                 constraints = session.run("SHOW CONSTRAINTS").data()
                 for constraint in constraints:
@@ -404,7 +412,7 @@ class Neo4jClient:
 
     def query_by_letter(self, letter: str) -> List[Dict]:
         """Query terms by starting letter"""
-        with self.driver.session() as session:
+        with self._driver.session() as session:
             result = session.run("""
                 MATCH (l:Letter {name: $letter})-[:CONTAINS]->(t:Term)
                 OPTIONAL MATCH (t)-[:HAS_CODE]->(c:Code)

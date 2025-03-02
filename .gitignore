@@ -27,3 +27,8 @@ data/
 
 # Streamlit
 .streamlit/
+ 
+# Python Virtual Environment and Database store
+venv/
+.DS_Store
+*$py.class
