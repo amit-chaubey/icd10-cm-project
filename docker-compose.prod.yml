@@ -18,7 +18,9 @@ services:
     environment:
       - NEO4J_URI=bolt://neo4j:7687
       - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${Fun@1208}
+      - NEO4J_PASSWORD=Fun@1208  # Direct value instead of interpolation
+    ports:
+      - "8501:8501"
     depends_on:
       - neo4j
     networks:
@@ -32,8 +34,11 @@ services:
   neo4j:
     image: neo4j:latest
     environment:
-      - NEO4J_AUTH=neo4j/${Fun@1208}
+      - NEO4J_AUTH=neo4j/Fun@1208  # Direct value instead of interpolation
       - NEO4J_PLUGINS=["apoc"]
+    ports:
+      - "7474:7474"
+      - "7687:7687"
     volumes:
       - neo4j_data:/data
     networks:
